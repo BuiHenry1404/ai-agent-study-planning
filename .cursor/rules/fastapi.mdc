@@ -1,0 +1,668 @@
+---
+description: Develop features and modules in fastapi
+globs: 
+alwaysApply: false
+---
+# FastAPI Development Rules
+
+## Project & Architecture
+
+### R1. Structure
+
+**MUST** use this layout (or equivalent):
+
+```bash
+app/
+  core/         # config, security, lifespan, logging
+  api/          # routers, dependencies, response schemas
+    v1/
+      routers/
+      deps.py
+      schemas.py
+  services/     # business logic (framework-agnostic)
+    socketio_service.py  # Socket.IO real-time functionality
+  repositories/ # DB CRUD (SQLAlchemy/Motor)
+  models/       # ORM models (if SQLAlchemy)
+  tasks/        # background workers, schedulers
+  utils/
+  __init__.py
+tests/
+static/         # Static files for Socket.IO test clients
+```
+
+**MUST** keep services independent of FastAPI (no Depends inside services).
+
+### R2. Typing & Style
+
+**MUST** type-hint everything.
+
+**MUST** use ruff + black + mypy (strict mode for app code).
+
+**SHOULD** add pre-commit hooks.
+
+## Modern Python Package Management
+
+### R2a. UV Package Manager (Recommended)
+
+**SHOULD** use `uv` for modern Python package management:
+
+```bash
+# Initialize project
+uv sync
+
+# Add Socket.IO support
+uv add python-socketio
+
+# Run application
+uv run uvicorn main:app --reload
+
+# Run tests
+uv run pytest
+
+# Add dependencies
+uv add fastapi uvicorn motor
+```
+
+**MUST** configure `pyproject.toml` with proper package discovery:
+
+```toml
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+```
+
+## Configuration & Secrets
+
+### R3. Settings (Pydantic v2)
+
+**MUST** use Pydantic v2 with pydantic-settings:
+
+```python
+from typing import Literal, Union
+from pydantic import SecretStr, field_validator, AnyUrl
+from pydantic_settings import BaseSettings
+
+class Settings(BaseSettings):
+    app_name: str = "svc"
+    env: Literal["dev","stg","prod"] = "dev"
+    mongo_uri: AnyUrl
+    jwt_secret: SecretStr
+    allowed_origins: Union[str, list[str]] = "http://localhost:3000"
+    
+    @field_validator("allowed_origins", mode="before")
+    @classmethod
+    def parse_cors_origins(cls, v):
+        if isinstance(v, str):
+            return [origin.strip() for origin in v.split(",") if origin.strip()]
+        return v if isinstance(v, list) else [str(v)]
+    
+    model_config = {
+        "env_file": ".env",
+        "case_sensitive": False
+    }
+
+settings = Settings()
+```
+
+**MUST NOT** hardcode secrets; **MUST** use env vars/secret stores.
+
+### R3a. Pydantic v2 Migration
+
+**MUST** follow these Pydantic v2 patterns:
+
+- Use `model_config = ConfigDict(...)` instead of `class Config:`
+- Use `@field_validator` instead of `@validator`
+- Use `model_dump()` instead of `.dict()`
+- Use `ConfigDict(from_attributes=True)` for response models
+- Use `json_schema_extra` instead of `schema_extra`
+
+**Custom Types (MongoDB ObjectId):**
+
+```python
+from pydantic_core import core_schema
+from bson import ObjectId
+
+class PyObjectId(ObjectId):
+    @classmethod
+    def __get_pydantic_core_schema__(cls, source_type: Any, handler):
+        return core_schema.no_info_plain_validator_function(
+            cls.validate,
+            serialization=core_schema.to_string_ser_schema(),
+        )
+
+    @classmethod
+    def __get_pydantic_json_schema__(cls, field_schema):
+        field_schema.update(type="string")
+        return field_schema
+```
+
+## Lifespan & Singletons
+
+### R4. App-wide Resources
+
+**MUST** initialize long-lived resources in lifespan, store on app.state, and close on shutdown.
+
+```python
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    app.state.mongo = AsyncIOMotorClient(settings.mongo_uri)
+    app.state.settings = settings
+    
+    # Initialize Socket.IO service
+    db = app.state.mongo[settings.mongo_db_name]
+    app.state.socketio_service = SocketIOService(db)
+    
+    yield
+    app.state.mongo.close()
+
+app = FastAPI(lifespan=lifespan)
+```
+
+**AVOID** module-level global clients (reload/multi-worker pitfalls).
+
+## Real-time Communication
+
+### R4a. Socket.IO Integration
+
+**SHOULD** use Socket.IO for real-time features:
+
+```python
+import socketio
+from app.services.chat import ChatService
+from app.core.security import verify_token
+
+class SocketIOService:
+    def __init__(self, db: AsyncIOMotorDatabase):
+        self.db = db
+        self.chat_service = ChatService(db)
+        self.sio = socketio.AsyncServer(
+            async_mode='asgi',
+            cors_allowed_origins="*"
+        )
+        self.user_sessions: Dict[str, str] = {}
+        self._register_handlers()
+    
+    def _register_handlers(self):
+        @self.sio.event
+        async def connect(sid, environ, auth):
+            # Authenticate user with JWT
+            token = auth.get('token')
+            payload = verify_token(token)
+            user_id = payload.get("sub")
+            
+            self.user_sessions[sid] = user_id
+            await self.sio.enter_room(sid, f"user_{user_id}")
+            
+        @self.sio.event
+        async def chat(sid, data):
+            user_id = self.user_sessions.get(sid)
+            chat_request = ChatRequest(**data)
+            response = await self.chat_service.process_message(user_id, chat_request)
+            
+            await self.sio.emit('conversation', response.model_dump(), room=sid)
+```
+
+**MUST** mount Socket.IO after app startup:
+
+```python
+@app.on_event("startup")
+async def mount_socketio():
+    socketio_asgi = app.state.socketio_service.get_asgi_app()
+    app.mount("/socket.io", socketio_asgi)
+```
+
+## Dependency Injection (DI)
+
+### R5. DI Rules
+
+**MUST** inject per-request resources via Depends, never create them inside route.
+
+**MUST** keep DI thin: compose request context, auth, DB handles/sessions.
+
+**MUST** use yield only when cleanup is required.
+
+### R6. Examples
+
+**Motor** (no per-request cleanup):
+
+```python
+def get_db(request: Request) -> AsyncIOMotorDatabase:
+    return request.app.state.mongo[request.app.state.settings.mongo_db_name]
+```
+
+**SQLAlchemy** (per-request session):
+
+```python
+async def get_session() -> AsyncIterator[AsyncSession]:
+    async with async_sessionmaker()() as s:
+        yield s
+```
+
+## Routers & Handlers
+
+### R7. Router Conventions
+
+**MUST** register routers under `/api/v{N}` with tags and prefix.
+
+**MUST** specify response_model, status_code, and precise parameter types.
+
+**MUST** limit route functions to orchestration; delegate to services.
+
+### R8. I/O Contracts
+
+**MUST** define request/response models (Pydantic) in `api/.../schemas.py`.
+
+**SHOULD** use `Annotated[...]` for validation/metadata on params.
+
+## Models & Validation
+
+### R9. Pydantic v2 Models
+
+**MUST** separate persistence models (ORM) from API schemas.
+
+**MUST** use Pydantic v2 syntax:
+
+```python
+class UserResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    
+    id: str
+    email: EmailStr
+    username: str
+    created_at: datetime
+```
+
+### R10. Validation
+
+**MUST** use Pydantic validators for invariants (IDs, enums).
+
+**SHOULD** centralize common field types (EmailStr, HttpUrl, UUID).
+
+## Database Layer
+
+### R11. SQLAlchemy (async)
+
+**MUST** use AsyncEngine + async_sessionmaker.
+
+**MUST** pass AsyncSession from DI into repo functions.
+
+**SHOULD** wrap multi-step write logic in `async with session.begin():`.
+
+### R12. Mongo (Motor)
+
+**MUST** create one AsyncIOMotorClient in lifespan.
+
+**SHOULD** inject AsyncIOMotorDatabase per request.
+
+**SHOULD** use sessions/transactions only when necessary (replica set).
+
+**MUST** use `model_dump()` for Pydantic v2 serialization:
+
+```python
+async def create(self, data_dict: dict) -> Model:
+    result = await self.collection.insert_one(data_dict)
+    return Model(**data_dict)
+
+# In services/routers:
+task_dict = task_data.model_dump()  # Not .dict()
+```
+
+## Auth & Security
+
+### R13. Authentication
+
+**MUST** implement OAuth2 password bearer or JWT bearer dependency.
+
+**MUST** extract user in dependency and inject CurrentUser object.
+
+**SHOULD** support API key for internal services.
+
+**Socket.IO Authentication:**
+
+```python
+@self.sio.event
+async def connect(sid, environ, auth):
+    if not auth or 'token' not in auth:
+        await self.sio.disconnect(sid)
+        return False
+    
+    token = auth['token']
+    payload = verify_token(token)
+    user_id = payload.get("sub")
+    
+    # Store session and join user room
+    self.user_sessions[sid] = user_id
+    await self.sio.enter_room(sid, f"user_{user_id}")
+```
+
+### R14. Security Headers & CORS
+
+**MUST** enable CORS explicitly (origins from config).
+
+**SHOULD** add security headers via middleware (e.g., X-Content-Type-Options, X-Frame-Options, Referrer-Policy).
+
+## Errors & Responses
+
+### R15. Error Handling
+
+**MUST** normalize errors using `HTTPException(status_code, detail)` or custom exception handlers.
+
+**MUST NOT** leak internal traces in prod responses.
+
+**SHOULD** map domain errors → HTTP codes (e.g., NotFound → 404, Conflict → 409).
+
+**Socket.IO Error Handling:**
+
+```python
+@self.sio.event
+async def chat(sid, data):
+    try:
+        # Process message
+        response = await self.chat_service.process_message(user_id, chat_request)
+        await self.sio.emit('conversation', response.model_dump(), room=sid)
+    except Exception as e:
+        await self.sio.emit('error', {'message': str(e)}, room=sid)
+```
+
+### R16. Responses
+
+**MUST** return typed models; avoid raw dicts (except trivial cases).
+
+**SHOULD** use ORJSONResponse for performance.
+
+## Background Work
+
+### R17. Background Tasks
+
+**MUST** keep FastAPI BackgroundTasks for short, idempotent jobs only.
+
+**SHOULD** use a proper queue (Celery, RQ, Arq, Dramatiq) for longer tasks.
+
+**MUST** pass only IDs/messages to tasks; re-fetch data inside the worker.
+
+## Performance & Concurrency
+
+### R18. Async Correctness
+
+**MUST** use async drivers in async endpoints (HTTPX AsyncClient, async DB).
+
+**MUST** avoid blocking calls; if unavoidable, offload to threadpool (run_in_executor).
+
+### R19. Limits
+
+**SHOULD** paginate lists by default (limit, offset/cursor).
+
+**SHOULD** set timeouts on outbound calls and DB operations.
+
+**SHOULD** support ETags/If-None-Match for large GETs where relevant.
+
+## Versioning & Stability
+
+### R20. API Versioning
+
+**MUST** version routes (`/api/v1`).
+
+**MUST** not break schemas within the same major version.
+
+### R21. Idempotency
+
+**SHOULD** make POST operations idempotent where possible (Idempotency-Key).
+
+## Documentation
+
+### R22. OpenAPI Hygiene
+
+**MUST** annotate summaries/descriptions, request/response models, and examples.
+
+**SHOULD** expose Swagger UI for internal use and Redoc for external reference.
+
+**SHOULD** document auth flows and error shapes.
+
+**Socket.IO Documentation:**
+
+```python
+@app.get("/socket-info", tags=["socketio"])
+async def socket_info():
+    return {
+        "socket_url": "/socket.io",
+        "test_client": "/static/socketio_test.html",
+        "events": {
+            "client_to_server": {"chat": "Send a chat message"},
+            "server_to_client": {"conversation": "Chat response received"}
+        },
+        "authentication": "Include JWT token in auth object"
+    }
+```
+
+## Observability
+
+### R23. Logging
+
+**MUST** use structured logging (JSON) with request IDs.
+
+**SHOULD** log at boundaries: inbound request, outbound call, DB op errors.
+
+### R24. Metrics & Tracing
+
+**SHOULD** expose `/healthz` (liveness) and `/readyz` (readiness).
+
+**SHOULD** integrate Prometheus metrics & OpenTelemetry tracing in prod.
+
+## Testing
+
+### R25. Tests
+
+**MUST** use pytest with httpx.AsyncClient/TestClient.
+
+**MUST** use dependency overrides for DB/auth in tests:
+
+```python
+app.dependency_overrides[get_db] = get_test_db
+```
+
+**SHOULD** seed ephemeral DB per test (transaction rollbacks or test containers).
+
+**Socket.IO Testing:**
+
+```python
+# Create test client for Socket.IO
+sio_client = socketio.AsyncClient()
+await sio_client.connect('http://localhost:8001', auth={'token': test_token})
+await sio_client.emit('chat', {'message': 'Hello!'})
+response = await sio_client.receive()
+```
+
+## Packaging & Deployment
+
+### R26. Server
+
+**MUST** run with uvicorn behind a reverse proxy.
+
+**SHOULD** avoid `--reload` in prod; use multiple workers and readiness probes.
+
+### R27. Docker
+
+**MUST** use slim Python base, multi-stage installs, non-root user.
+
+**SHOULD** pin dependencies and enable `pip --no-cache-dir`.
+
+### R27a. Modern Tooling
+
+**SHOULD** use `uv` in Docker for faster builds:
+
+```dockerfile
+FROM python:3.12-slim
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-cache
+```
+
+## Code Quality & Safety
+
+### R28. Linting & CI
+
+**MUST** run ruff, mypy, tests, and security scans (bandit, pip-audit) in CI.
+
+**SHOULD** enforce coverage thresholds.
+
+### R29. Inputs & Security
+
+**MUST** validate all inputs (query, path, body, headers).
+
+**MUST** sanitize file uploads and limit size.
+
+**MUST** never echo secrets back; scrub logs.
+
+## Pydantic v2 Migration Checklist
+
+### R30. Migration Tasks
+
+When migrating to Pydantic v2, **MUST** complete:
+
+- [ ] Update imports: `pydantic_settings.BaseSettings`
+- [ ] Replace `@validator` with `@field_validator`
+- [ ] Update `Config` classes to `model_config = ConfigDict(...)`
+- [ ] Change `.dict()` to `.model_dump()` throughout codebase
+- [ ] Fix custom types (ObjectId): use `__get_pydantic_core_schema__`
+- [ ] Update schema generation: `json_schema_extra` not `schema_extra`
+- [ ] Fix response models: `ConfigDict(from_attributes=True)`
+- [ ] Test all model creation and serialization
+
+## Socket.IO Implementation Checklist
+
+### R31. Real-time Features
+
+When implementing Socket.IO, **MUST** complete:
+
+- [ ] Add `python-socketio` dependency
+- [ ] Create `SocketIOService` with authentication
+- [ ] Mount Socket.IO ASGI app after startup
+- [ ] Implement event handlers: `connect`, `disconnect`, `chat`
+- [ ] Add user session management and rooms
+- [ ] Handle errors gracefully with `error` events
+- [ ] Create test client for development
+- [ ] Document Socket.IO events and authentication
+- [ ] Add static file serving for test clients
+- [ ] Integrate with existing chat services
+
+## AI Agent Actionable Playbook
+
+When generating a new endpoint, the agent **MUST**:
+
+### Scaffold
+
+1. Create schema(s): CreateX, X, XList with Pydantic v2 syntax.
+2. Add router with response_model, status_code.
+3. Add DI for DB and CurrentUser.
+4. Consider Socket.IO real-time updates if applicable.
+
+### Implement
+
+1. Route → call service → repository.
+2. Use `model_dump()` for serialization.
+3. Validate inputs; map domain errors to HTTPException.
+4. Add pagination for list endpoints.
+5. Emit Socket.IO events for real-time updates.
+
+### Wire
+
+1. Register router under `/api/v1`.
+2. Add OpenAPI descriptions/examples.
+3. Add tests (success, validation error, not found, auth fail).
+4. Add Socket.IO event tests if applicable.
+
+### Guardrails
+
+- No globals for live clients; use lifespan.
+- No blocking I/O in async routes.
+- No secrets in code; use Settings.
+- Use Pydantic v2 syntax throughout.
+- Authenticate Socket.IO connections with JWT.
+- Log request id, duration, and errors.
+
+## Minimal Golden Snippets
+
+### Lifespan Singleton
+
+```python
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    app.state.mongo = AsyncIOMotorClient(settings.mongo_uri)
+    
+    # Initialize Socket.IO
+    db = app.state.mongo[settings.mongo_db_name]
+    app.state.socketio_service = SocketIOService(db)
+    
+    yield
+    app.state.mongo.close()
+
+app = FastAPI(lifespan=lifespan)
+```
+
+### DI
+
+```python
+def get_db(request: Request) -> AsyncIOMotorDatabase:
+    return request.app.state.mongo["appdb"]
+
+async def get_session() -> AsyncIterator[AsyncSession]:
+    async with async_sessionmaker()() as s:
+        yield s
+```
+
+### Router (Pydantic v2)
+
+```python
+router = APIRouter(prefix="/items", tags=["items"])
+
+@router.post("/", response_model=ItemResponse, status_code=201)
+async def create_item(
+    body: ItemCreate,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+    user: CurrentUser = Depends(require_user),
+):
+    return await item_service.create(db, user.id, body)
+```
+
+### Service (framework-agnostic, Pydantic v2)
+
+```python
+async def create(db: AsyncIOMotorDatabase, user_id: str, data: ItemCreate) -> Item:
+    doc = data.model_dump()  # Not .dict()
+    doc["user_id"] = ObjectId(user_id)
+    inserted = await db["items"].insert_one(doc)
+    return Item(id=str(inserted.inserted_id), **doc)
+```
+
+### Socket.IO Service
+
+```python
+class SocketIOService:
+    def __init__(self, db: AsyncIOMotorDatabase):
+        self.sio = socketio.AsyncServer(async_mode='asgi')
+        self.user_sessions: Dict[str, str] = {}
+        self._register_handlers()
+    
+    @self.sio.event
+    async def chat(self, sid, data):
+        user_id = self.user_sessions[sid]
+        response = await self.chat_service.process_message(user_id, data)
+        await self.sio.emit('conversation', response.model_dump(), room=sid)
+```
+
+### Tests (override dep)
+
+```python
+app.dependency_overrides[get_db] = lambda: test_client["testdb"]
+```
+
+### Project Initialization
+
+```bash
+# Modern setup with uv and Socket.IO
+uv sync
+uv add python-socketio
+uv run python test_pydantic_fix.py  # Verify Pydantic v2 compatibility
+uv run python create_test_user.py   # Create test user for Socket.IO
+uv run uvicorn main:app --reload
+# Visit: http://localhost:8001/static/socketio_test.html
+```
