@@ -1,6 +1,7 @@
 import socketio
 from typing import Dict, Optional
 from motor.motor_asyncio import AsyncIOMotorDatabase
+from app.agents import study_planning_team
 from app.core.logging import get_logger
 from app.core.security import verify_token
 
@@ -222,8 +223,8 @@ class SocketIOService:
                 logger.error(f"Leave conversation error for session {sid}: {e}")
         
         @self.sio.event
-        async def soulcare_chat(sid, data):
-            """Handle soulcare team chat messages."""
+        async def study_planning_team_chat(sid, data):
+            """Handle study planning team chat messages."""
             try:
                 user_id = self.user_sessions.get(sid)
                 if not user_id:
@@ -251,12 +252,12 @@ class SocketIOService:
                 metadata.update({
                     'socket_session': sid,
                     'realtime': True,
-                    'agent_type': 'soulcare'
+                    'agent_type': 'study_planning'
                 })
                 
                 # Step 1: Create a soulcare task in the database
                 try:
-                    task = await self.task_service.create_soulcare_task(
+                    task = await self.task_service.create_study_planning_task(
                         user_id=user_id,
                         user_message=message,
                         conversation_id=conversation_id,
@@ -264,19 +265,19 @@ class SocketIOService:
                     )
                     task_id = str(task.id)
                     
-                    logger.info(f"Created soulcare task {task_id} for user {user_id} in conversation {task.conversation_id}")
+                    logger.info(f"Created study planning task {task_id} for user {user_id} in conversation {task.conversation_id}")
                     
                     # Emit task created event
                     await self.sio.emit('task_created', {
                         'task_id': task_id,
                         'conversation_id': str(task.conversation_id),
-                        'message': 'Soulcare task created successfully'
+                        'message': 'Study planning task created successfully'
                     }, room=sid)
                     
                 except Exception as e:
-                    logger.error(f"Failed to create soulcare task: {e}")
+                    logger.error(f"Failed to create Study planning task: {e}")
                     await self.sio.emit('error', {
-                        'message': 'Failed to create soulcare task',
+                        'message': 'Failed to create Study planning task',
                         'error': str(e)
                     }, room=sid)
                     return
@@ -286,15 +287,15 @@ class SocketIOService:
                     autogen_client = self.get_autogen_llm_client()
                     
                     # Import and create SoulcareTeam
-                    from app.agents.soulcare_team import SoulcareTeam
-                    soulcare_team = SoulcareTeam(autogen_client)
+                    from app.agents.study_planning_team import StudyPlanningTeam
+                    study_planning_team = StudyPlanningTeam(autogen_client)
                     if conversation_id:
                         agent_state = await self.task_service.get_conversation_state(conversation_id, user_id)
                         if agent_state:
-                            await soulcare_team.load_state(agent_state)
+                            await study_planning_team.load_state(agent_state)
                     
                     # Run soulcare conversation with Socket.IO streaming
-                    result = await soulcare_team.run_conversation_with_socket(
+                    result = await study_planning_team.run_conversation_with_socket(
                         user_message=message,
                         user_sid=sid,
                         task_id=task_id,
@@ -302,7 +303,7 @@ class SocketIOService:
                     )
                     # Step 3: Save agent team state after completion
                     try:
-                        agent_state = await soulcare_team.save_state()
+                        agent_state = await study_planning_team.save_state()
                         
                         # Update task with agent state and conversation history
                         await self.task_service.update_task_with_agent_state(
@@ -333,26 +334,26 @@ class SocketIOService:
                         )
                     
                 except Exception as e:
-                    logger.error(f"Soulcare team error: {e}")
+                    logger.error(f"Study planning team error: {e}")
                     
                     # Update task as failed
                     await self.task_service.update_task_with_agent_state(
                         task_id=task_id,
-                        agent_state={"error": "Soulcare team failed"},
+                        agent_state={"error": "Study planning team failed"},
                         status="failed",
                         error_message=str(e)
                     )
                     
                     await self.sio.emit('error', {
                         'task_id': task_id,
-                        'message': 'Failed to process soulcare request',
+                        'message': 'Failed to process study planning request',
                         'error': str(e)
                     }, room=sid)
                 
             except Exception as e:
-                logger.error(f"Soulcare chat error for session {sid}: {e}")
+                logger.error(f"Study planning team chat error for session {sid}: {e}")
                 await self.sio.emit('error', {
-                    'message': 'Failed to process soulcare message',
+                    'message': 'Failed to process Study planning team message',
                     'error': str(e)
                 }, room=sid)
     

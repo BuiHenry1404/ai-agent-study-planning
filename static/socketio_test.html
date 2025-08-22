@@ -484,7 +484,7 @@
             document.getElementById('messageInput').value = '';
         }
 
-        function sendSoulcareMessage() {
+        function sendStudyPlanningMessage() {
             const message = document.getElementById('messageInput').value.trim();
             const conversationId = document.getElementById('conversationId').value.trim();
 
@@ -503,7 +503,7 @@
                 metadata: {
                     client: 'test_client',
                     timestamp: new Date().toISOString(),
-                    type: 'soulcare'
+                    type: 'study_planning'
                 }
             };
 
@@ -511,9 +511,9 @@
                 data.conversation_id = conversationId;
             }
 
-            socket.emit('soulcare_chat', data);
-            addEventLog('SOULCARE_CHAT_SENT', data);
-            addMessage(`[You to Soulcare Team] ${message}`, 'user');
+            socket.emit('study_planning_team_chat', data);
+            addEventLog('STUDY_PLANNING_TEAM_CHAT_SENT', data);
+            addMessage(`[You to Study Planning Team] ${message}`, 'user');
             
             // Clear message input
             document.getElementById('messageInput').value = '';
@@ -559,7 +559,7 @@
         document.getElementById('messageInput').addEventListener('keypress', function(e) {
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
-                sendSoulcareMessage();
+                sendStudyPlanningMessage();
             }
         });
 

@@ -221,25 +221,25 @@ class TaskService:
         """Get pending tasks for background processing."""
         return await self.task_repo.get_tasks_by_status("pending", limit)
     
-    async def create_soulcare_task(
+    async def create_study_planning_task(
         self, 
         user_id: str, 
         user_message: str, 
         conversation_id: Optional[str] = None,
         metadata: Optional[dict] = None
     ) -> Task:
-        """Create a new soulcare task."""
+        """Create a new study planning task."""
         # If no conversation_id provided, create a new conversation
         if not conversation_id:
             from app.api.v1.schemas import ConversationCreate
             
             # Generate conversation title from user message (first 50 chars)
-            title = f"Soulcare: {user_message[:40]}" + ("..." if len(user_message) > 40 else "")
+            title = f"Study Planning: {user_message[:40]}" + ("..." if len(user_message) > 40 else "")
             
             conversation_data = ConversationCreate(
                 title=title,
-                description="Soulcare conversation",
-                metadata={"auto_generated": True, "type": "soulcare"}
+                description="Study Planning conversation",
+                metadata={"auto_generated": True, "type": "study_planning"}
             )
             
             conversation = await self.conversation_service.create_conversation(
@@ -255,10 +255,10 @@ class TaskService:
             "user_message": user_message,
             "status": "in_progress",  # Start as in_progress since we're processing immediately
             "priority": "medium",
-            "category": "soulcare",
-            "tags": ["soulcare", "life-advice", "emotional-support"],
+            "category": "study_planning",
+            "tags": ["study_planning", "life-advice", "emotional-support"],
             "completion_percentage": 0,
-            "agent_type": "soulcare",
+            "agent_type": "study_planning",
             "started_at": datetime.now(),
             "metadata": metadata or {}
         }
@@ -294,18 +294,18 @@ class TaskService:
         
         return await self.task_repo.update(task_id, update_dict)
     
-    async def get_soulcare_tasks(
+    async def get_study_planning_tasks(
         self,
         user_id: str,
         skip: int = 0,
         limit: int = 20,
         status: Optional[str] = None
     ) -> Tuple[List[Task], int]:
-        """Get soulcare tasks for a user."""
+        """Get study planning tasks for a user."""
         return await self.task_repo.get_user_tasks(
             user_id=user_id,
             status=status,
-            category="soulcare",
+            category="study_planning",
             skip=skip,
             limit=limit,
             sort_by="created_at",

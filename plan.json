@@ -1,0 +1,16 @@
+{
+  "events": [
+    {
+      "summary": "Learn Python",
+      "start": {
+        "dateTime": "2025-08-30T19:00:00",
+        "timeZone": "Asia/Ho_Chi_Minh"
+      },
+      "end": {
+        "dateTime": "2025-08-30T21:00:00",
+        "timeZone": "Asia/Ho_Chi_Minh"
+      },
+      "description": "Study Python"
+    }
+  ]
+}

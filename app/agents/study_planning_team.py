@@ -135,6 +135,71 @@ Rules:
         except Exception as e:
             return {"error": str(e), "conversation_history": self.conversation_history}
 
+    async def run_conversation_with_socket(
+        self,
+        user_message: str,
+        user_sid: str,
+        task_id: str,
+        socketio_service=None,
+        output_stats: bool = True
+    ) -> Dict[str, Any]:
+        """Run the study planning conversation with Socket.IO streaming"""
+        from autogen_agentchat.messages import TextMessage
+        try:
+            self.initial_message = user_message
+            self.conversation_history = []
+
+            async for message in self.team.run_stream(
+                task=TextMessage(content=user_message, source="User"),
+                cancellation_token=self.cancellation_token
+            ):
+                self.conversation_history.append({
+                    "agent": getattr(message, "name", "Unknown"),
+                    "content": getattr(message, "content", ""),
+                    "timestamp": datetime.now().isoformat(),
+                    "type": "message"
+                })
+                if socketio_service and hasattr(message, "content"):
+                    await socketio_service.sio.emit('task_message', {
+                        'task_id': task_id,
+                        'type': 'stream',
+                        'data': {
+                            'message': str(getattr(message, "content", "")),
+                            'agent': getattr(message, 'name', 'system')
+                        }
+                    }, room=user_sid)
+
+            if socketio_service:
+                await socketio_service.sio.emit('task_message', {
+                    'task_id': task_id,
+                    'type': 'complete',
+                    'data': {
+                        'message': 'Study planning conversation completed'
+                    }
+                }, room=user_sid)
+
+            return {
+                "success": True,
+                "conversation_history": self.conversation_history,
+                "final_message": self.conversation_history[-1] if self.conversation_history else None,
+                "total_messages": len(self.conversation_history)
+            }
+        except Exception as e:
+            import logging
+            logging.error(f"Error in study planning conversation: {str(e)}")
+            if socketio_service:
+                await socketio_service.sio.emit('task_message', {
+                    'task_id': task_id,
+                    'type': 'error',
+                    'data': {
+                        'message': f"Error in conversation: {str(e)}"
+                    }
+                }, room=user_sid)
+            return {
+                "error": str(e),
+                "conversation_history": self.conversation_history
+            }
+
     async def save_state(self) -> Dict[str, Any]:
         """Save team state"""
         try:
@@ -154,6 +219,9 @@ Rules:
     def cancel_conversation(self):
         """Cancel conversation"""
         self.cancellation_token.cancel()
+
+
+
 
 
 class StudyPlanningTeamManager:
