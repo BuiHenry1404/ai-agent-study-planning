@@ -585,7 +585,7 @@ When generating a new endpoint, the agent **MUST**:
 
 ```python
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def study_planning(app: FastAPI):
     app.state.mongo = AsyncIOMotorClient(settings.mongo_uri)
     
     # Initialize Socket.IO
@@ -595,7 +595,7 @@ async def lifespan(app: FastAPI):
     yield
     app.state.mongo.close()
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(study_planning=study_planning)
 ```
 
 ### DI

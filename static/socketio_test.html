@@ -429,7 +429,7 @@
                     addMessage(data.data.message, 'task');
                 } else if (data.type === 'stream') {
                     const agent = data.data.agent || 'system';
-                    const messageType = agent === 'LifeAdvisor' || agent === 'SongRecommender' ? 'soulcare' : 'system';
+                    const messageType = agent === 'study_planning_agent' || agent === 'study_planning_agent' ? 'study_planning' : 'system';
                     addMessage(`[${agent}] ${data.data.message}`, messageType);
                 } else if (data.type === 'complete') {
                     addMessage(data.data.message, 'task');

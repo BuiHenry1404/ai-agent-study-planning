@@ -256,7 +256,7 @@ class TaskService:
             "status": "in_progress",  # Start as in_progress since we're processing immediately
             "priority": "medium",
             "category": "study_planning",
-            "tags": ["study_planning", "life-advice", "emotional-support"],
+            "tags": ["study_planning", "calendar_sync_agent"],
             "completion_percentage": 0,
             "agent_type": "study_planning",
             "started_at": datetime.now(),

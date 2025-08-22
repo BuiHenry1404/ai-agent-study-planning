@@ -18,8 +18,8 @@ logger = structlog.get_logger(__name__)
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Application lifespan manager."""
+async def study_planning(app: FastAPI):
+    """Application study planning manager."""
     logger.info("Starting up application", app_name=settings.app_name, env=settings.env)
     
     # Initialize database connection
@@ -90,7 +90,7 @@ app = FastAPI(
     title="Chatbot API",
     description="A FastAPI template for managing chatbot tasks and conversations with MongoDB and real-time Socket.IO chat",
     version="1.0.0",
-    lifespan=lifespan,
+    study_planning=study_planning,
     default_response_class=ORJSONResponse,
     docs_url="/docs" if settings.env != "prod" else None,
     redoc_url="/redoc" if settings.env != "prod" else None,
