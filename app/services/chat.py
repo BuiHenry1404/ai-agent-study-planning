@@ -3,7 +3,6 @@ from app.api.deps import get_autogen_llm_client
 from app.api.v1.schemas import ChatRequest, ChatResponse, TaskCreate, ChatMessageResponse
 from app.services.task import TaskService
 from app.services.conversation import ConversationService
-from app.agents.soulcare_team import SoulcareTeam
 
 
 class ChatService:
@@ -28,7 +27,3 @@ class ChatService:
             user_id=user_id,
             task_data=task_data
         )
-
-        soulcare_team = SoulcareTeam(self.llm_client)
-
-        await soulcare_team.start(task)

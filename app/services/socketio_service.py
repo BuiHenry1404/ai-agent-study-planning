@@ -9,7 +9,7 @@ from app.services.auth import AuthService
 from app.services.task import TaskService
 from app.api.v1.schemas import ChatRequest, ChatResponse
 from app.models.user import CurrentUser
-from app.services.study_planning_team import StudyPlanningTeam
+from app.agents.study_planning_team import StudyPlanningTeam
 
 logger = get_logger(__name__)
 
@@ -294,7 +294,7 @@ class SocketIOService:
                             await soulcare_team.load_state(agent_state)
                     
                     # Run soulcare conversation with Socket.IO streaming
-                    result = await StudyPlanningTeam.run_conversation(
+                    result = await soulcare_team.run_conversation_with_socket(
                         user_message=message,
                         user_sid=sid,
                         task_id=task_id,

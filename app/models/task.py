@@ -72,7 +72,6 @@ class Task(BaseDocument):
     metadata: dict = Field(default_factory=dict, description="Additional task metadata")
 
     # Agent team state and type
-    agent_type: Optional[str] = Field(None, description="Type of agent that processed this task (e.g., 'soulcare', 'general')")
     agent_state: dict = Field(default_factory=dict, description="Saved state from agent team")
     
     # Task execution details
